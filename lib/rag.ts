@@ -1,7 +1,7 @@
 import { prisma } from './prisma';
 import { generateEmbedding } from './embeddings';
-import { cosineSimilarity } from './similarity';
 import OpenAI from 'openai';
+import pgvector from 'pgvector';
 
 if (!process.env.OPENAI_API_KEY) {
   throw new Error('OPENAI_API_KEY environment variable is not set');
@@ -10,6 +10,10 @@ if (!process.env.OPENAI_API_KEY) {
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
+
+const TOP_K = 3;
+const MAX_COSINE_DISTANCE = 0.5; // similarity > 0.5 => distance < 0.5
+const MAX_DISTANCE_FOR_BEST = 0.9; // if best chunk has distance > 0.9 (similarity < 0.1), say no relevant
 
 export interface RAGResult {
   answer: string;
@@ -21,46 +25,39 @@ export interface RAGResult {
 
 export async function queryRAG(question: string): Promise<RAGResult> {
   const questionEmbedding = await generateEmbedding(question);
+  const embeddingSql = pgvector.toSql(questionEmbedding);
 
-  const allChunks = await prisma.chunk.findMany({
-    include: {
-      document: {
-        select: {
-          name: true,
-        },
-      },
-    },
-  });
+  // pgvector cosine distance operator <=>; database returns only top matches
+  const rows = await prisma.$queryRaw<
+    Array<{ content: string; documentName: string; distance: number }>
+  >`
+    SELECT c.content, d.name as "documentName", (c.embedding <=> ${embeddingSql}::vector) as distance
+    FROM "Chunk" c
+    JOIN "Document" d ON c."documentId" = d.id
+    ORDER BY c.embedding <=> ${embeddingSql}::vector
+    LIMIT ${TOP_K}
+  `;
 
-  if (allChunks.length === 0) {
+  if (rows.length === 0) {
     return {
       answer: 'No documents have been uploaded yet.',
       sources: [],
     };
   }
 
-  const scoredChunks = allChunks.map((chunk) => ({
-    chunk,
-    similarity: cosineSimilarity(questionEmbedding, chunk.embedding),
-  }));
-  
-  const similarities = scoredChunks
-    .filter((s) => s.similarity > 0.5)   // <-- adjust threshold
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, 3);
-
-  if (similarities.length === 0 || similarities[0].similarity < 0.1) {
+  const relevantRows = rows.filter((r) => r.distance <= MAX_COSINE_DISTANCE);
+  if (relevantRows.length === 0 || rows[0].distance > MAX_DISTANCE_FOR_BEST) {
     return {
       answer: 'No relevant information found in uploaded documents.',
       sources: [],
     };
   }
 
-  const contextChunks = similarities
-    .map((s) => s.chunk.content)
-    .join('\n\n---\n\n');
+  const contextChunks = relevantRows.map((r) => r.content).join('\n\n---\n\n');
 
-  const prompt = `You are answering strictly using the provided context. If the answer is not in the context, say you don't know.
+  const prompt = `You are a precise assistant. Answer strictly using the provided context.
+  If the answer is not contained in the context, respond with:
+  "I don't know based on the provided documents."
 
 Context:
 ${contextChunks}
@@ -83,9 +80,9 @@ Answer:`;
 
     const answer = completion.choices[0]?.message?.content || 'I could not generate an answer.';
 
-    const sources = similarities.map((s) => ({
-      documentName: s.chunk.document.name,
-      chunkContent: s.chunk.content,
+    const sources = relevantRows.map((r) => ({
+      documentName: r.documentName,
+      chunkContent: r.content,
     }));
 
     return {
