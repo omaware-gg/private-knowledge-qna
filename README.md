@@ -28,7 +28,7 @@ PostgreSQL provides robust relational data management, ACID compliance, and exce
 Prisma offers type-safe database access, excellent TypeScript integration, and simplifies migrations. It provides a clean abstraction over raw SQL while maintaining flexibility.
 
 ### Why Manual Similarity Instead of pgvector?
-For an internship-level assignment, implementing cosine similarity manually demonstrates understanding of the core RAG concepts. pgvector would be the production choice for scale, but manual implementation shows:
+For this assignment, implementing cosine similarity manually demonstrates understanding of the core RAG concepts. pgvector would be the production choice for SCALE, but manual implementation shows:
 - Understanding of vector similarity
 - Ability to implement algorithms
 - Awareness of when to use specialized tools vs. simple solutions
@@ -89,7 +89,6 @@ For an internship-level assignment, implementing cosine similarity manually demo
 - ❌ Rate limiting
 - ❌ Streaming responses
 - ❌ Large-scale optimization (pgvector, caching)
-- ❌ Multi-user workspace support
 - ❌ Document deletion
 - ❌ File type support beyond .txt
 
