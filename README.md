@@ -1,135 +1,140 @@
-# Knowledge Q&A - Private Knowledge Workspace
+# Knowledge Q&A
 
-A web application that allows users to upload text documents, ask questions, and receive answers grounded in the uploaded content using a RAG (Retrieval-Augmented Generation) pipeline.
+**Private Knowledge Workspace** — Upload `.txt` documents, ask questions, get answers grounded in your content using a RAG (Retrieval-Augmented Generation) pipeline.
 
-## Overview
+---
 
-1. **Upload Flow**: Users upload `.txt` files which are:
-   - Validated (size, format, content, duplicate detection via SHA-256)
-   - Recursively split into semantically meaningful chunks
-   - Embedded using OpenAI's `text-embedding-3-small` model
-   - Stored in PostgreSQL with pgvector for vector similarity search
+## Features
 
-2. **Question Flow**: When users ask questions:
-   - The question is embedded
-   - Top 3 most relevant chunks are found via pgvector cosine distance in the database
-   - These chunks are sent as context to GPT-4o-mini
-   - The answer is returned with source attribution (document name + chunk content)
+- **Upload** — Drag-and-drop or browse; `.txt` only, max 1 MB. Duplicate content is detected (SHA-256) and rejected.
+- **Chunking** — Recursive splitter on semantic boundaries (paragraphs → sentences → words); chunks capped at ~4000 chars to fit the embedding model.
+- **Embeddings** — OpenAI `text-embedding-3-small`; stored in PostgreSQL with **pgvector** for fast similarity search.
+- **Ask** — Question is embedded; top 3 relevant chunks are retrieved via cosine distance in the DB, then sent to **GPT-4o-mini** with a grounding prompt. Answer + source chunks returned.
+- **UI** — Glassmorphism design: home, upload, documents list, ask, and system status pages.
+- **Production-ready** — Prisma migrations committed, `postinstall` for Vercel, README and `.env.example` for deployment.
+
+---
 
 ## Tech Stack
 
-- **Next.js 14** (App Router)
-- **TypeScript** (strict mode)
-- **PostgreSQL** + **pgvector** (vector similarity search)
-- **Prisma ORM**
-- **OpenAI API** (embeddings + completions)
-- **TailwindCSS** (glassmorphism UI)
+| Layer        | Technology |
+|-------------|------------|
+| Framework   | Next.js 14 (App Router) |
+| Language    | TypeScript (strict) |
+| Database    | PostgreSQL + **pgvector** |
+| ORM         | Prisma |
+| AI          | OpenAI (text-embedding-3-small, gpt-4o-mini) |
+| Styling     | TailwindCSS |
+
+---
 
 ## Prerequisites
 
 - **Node.js** 18+ (LTS recommended)
-- **PostgreSQL** with **pgvector** extension (e.g. [Neon](https://neon.tech) has pgvector built-in)
+- **PostgreSQL** with the [pgvector](https://github.com/pgvector/pgvector) extension (e.g. [Neon](https://neon.tech))
 - **OpenAI API key**
+
+---
 
 ## Local Development
 
-1. **Install dependencies**:
+1. **Install dependencies**
    ```bash
    npm install
    ```
 
-2. **Set up environment variables**:
+2. **Environment variables**
    ```bash
    cp .env.example .env
    ```
-   Then edit `.env` and add your:
-   - `OPENAI_API_KEY`
-   - `DATABASE_URL` (PostgreSQL connection string)
+   Edit `.env` and set:
+   - `OPENAI_API_KEY` — your OpenAI API key
+   - `DATABASE_URL` — PostgreSQL connection string (e.g. `postgresql://user:pass@host:5432/dbname?sslmode=require`)
 
-3. **Set up the database** (PostgreSQL must have [pgvector](https://github.com/pgvector/pgvector) available):
+3. **Database** (creates tables and applies migrations; requires pgvector)
    ```bash
    npx prisma migrate dev
    ```
 
-4. **Run the development server**:
+4. **Run the app**
    ```bash
    npm run dev
    ```
+   Open [http://localhost:3000](http://localhost:3000).
 
-5. Open [http://localhost:3000](http://localhost:3000).
+---
 
 ## Deploy to Vercel
 
-1. **Push to GitHub** (ensure `prisma/migrations/` is committed).
+1. **Push to GitHub**  
+   Ensure `prisma/migrations/` is committed (do **not** ignore it in `.gitignore`).
 
-2. **Import in Vercel**:
-   - Go to [vercel.com/new](https://vercel.com/new) and import your repository.
-   - Framework preset: **Next.js** (auto-detected).
+2. **Import project**  
+   [vercel.com/new](https://vercel.com/new) → Import your repo. Framework: **Next.js** (auto-detected).
 
-3. **Set environment variables** in Vercel dashboard:
-   - `DATABASE_URL` — your PostgreSQL connection string (e.g. Neon pooled URL with `?sslmode=require`)
+3. **Environment variables** (Vercel project → Settings → Environment Variables)
+   - `DATABASE_URL` — production PostgreSQL URL (e.g. Neon pooled connection with `?sslmode=require`)
    - `OPENAI_API_KEY` — your OpenAI API key
 
-4. **Apply migrations** to your production database:
+4. **Run migrations** against the production database once:
    ```bash
    DATABASE_URL="your-production-url" npx prisma migrate deploy
    ```
-   Or run this from Vercel CLI / a CI step.
+   You can run this locally or in a CI step; Vercel does not run migrations automatically.
 
-5. **Deploy** — Vercel will run `npm install` → `postinstall` (prisma generate) → `next build` automatically.
+5. **Deploy**  
+   Vercel runs `npm install` → `postinstall` (`prisma generate`) → `npm run build`. No extra config needed.
 
-> **Note**: Vercel serverless functions have a 10-second timeout on the Hobby plan. Large file uploads with many chunks may need Vercel Pro (60s timeout) or a background job setup.
+---
 
-## What Is Implemented
+## Scripts
 
-- Document upload with validation (.txt files, max 1MB)
-- Duplicate detection via SHA-256 content hashing
-- Recursive text chunking (paragraph → sentence → word boundaries)
-- Chunk sizes tuned to embedding model context window (4000 chars / ~1000 tokens)
-- Embedding generation using OpenAI text-embedding-3-small
-- Vector similarity search with pgvector (cosine distance in DB)
-- Question answering with RAG pipeline (GPT-4o-mini)
-- Source attribution (document name + chunk content)
-- Documents listing page
-- System status/health check page
-- Glassmorphism UI with TailwindCSS
-- TypeScript with strict types
+| Command         | Description |
+|-----------------|-------------|
+| `npm run dev`   | Start Next.js dev server |
+| `npm run build` | Run `prisma generate` then `next build` |
+| `npm run start` | Start production server (after `build`) |
+| `npm run lint`  | Run ESLint |
+
+`postinstall` runs `prisma generate` after `npm install` (used by Vercel).
+
+---
 
 ## Project Structure
 
 ```
 app/
   api/
-    upload/route.ts    - File upload + chunking + embedding
-    ask/route.ts       - RAG question answering
-    documents/route.ts - List documents
-    status/route.ts    - Health checks
-  upload/page.tsx      - Upload page (drag & drop)
-  documents/page.tsx   - Documents listing
-  ask/page.tsx         - Question page
-  status/page.tsx      - Status page
-  page.tsx             - Home page
-  layout.tsx           - Root layout with navigation
-  globals.css          - Glassmorphism design system
+    upload/route.ts     # Upload file → chunk → embed → store (duplicate check via hash)
+    ask/route.ts        # RAG: embed question → pgvector top-k → LLM → answer + sources
+    documents/route.ts  # List documents with chunk counts
+    status/route.ts     # Health: DB + OpenAI embedding + completion
+  upload/page.tsx       # Upload UI (drag-and-drop, duplicate/error/success)
+  documents/page.tsx   # Documents table
+  ask/page.tsx         # Question form + answer + source chunks
+  status/page.tsx      # System status
+  page.tsx             # Home
+  layout.tsx           # Root layout + nav
+  globals.css          # Glassmorphism styles
 
 lib/
-  prisma.ts            - Prisma client singleton
-  chunking.ts          - Recursive text splitter
-  embeddings.ts        - OpenAI embedding generation
-  rag.ts               - RAG pipeline (pgvector search + LLM)
+  prisma.ts            # Prisma client singleton
+  chunking.ts          # Recursive text splitter (semantic boundaries, max 4000 chars)
+  embeddings.ts        # OpenAI text-embedding-3-small
+  rag.ts               # queryRAG: pgvector search + GPT-4o-mini with grounding prompt
 
 prisma/
-  schema.prisma        - Database schema (Document, Chunk with vector)
-  migrations/          - Database migrations
+  schema.prisma        # Document (id, name, contentHash), Chunk (content, vector(1536))
+  migrations/          # Applied with prisma migrate dev / migrate deploy
 ```
 
-## Architecture Decisions
+---
 
-### Why pgvector?
-pgvector provides vector similarity search inside PostgreSQL. The DB computes cosine distance and returns only the top-k chunks, so the app never loads all embeddings into memory.
+## Architecture Notes
 
-### Why recursive chunking?
-Splits on semantic boundaries (paragraphs → sentences → words) rather than fixed character windows. Produces fewer, more meaningful chunks that stay within the embedding model's context window.
+- **pgvector** — Similarity is computed in the database (`ORDER BY embedding <=> $queryVector LIMIT 3`). The app never loads all chunks; avoids OOM and scales.
+- **Recursive chunking** — Splits on paragraph, then sentence, then word boundaries. Keeps chunks under the embedding model’s context window and improves retrieval quality.
+- **Duplicate detection** — SHA-256 of file content stored as `Document.contentHash` (unique). Re-uploading the same content returns 409 and the existing document name.
+- **Grounding** — The LLM is instructed to answer only from the provided chunks and to say “I don’t know based on the provided documents.” when the answer isn’t in the context.
 
-### Why SHA-256 for duplicate detection?
-Fast O(1) lookup via a unique index. Detects identical content even if the filename differs. No embedding calls wasted on duplicates.
+---

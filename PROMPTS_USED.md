@@ -1,143 +1,113 @@
 # PROMPTS_USED.md
 
+This file records the main prompts and design decisions that shaped the Knowledge Q&A application, including later changes (pgvector, recursive chunking, duplicate detection, UI, production).
+
+---
+
 ## 1. System Architecture Planning
 
 **Prompt Used:**
 
 > Design a clean architecture for a RAG-based document Q&A system using Next.js App Router, PostgreSQL, and Prisma. Keep it minimal but production-aware.
 
-**Why This Prompt Was Used:**
-To validate high-level architectural decisions before implementation.
-
-**Manual Decisions Taken:**
-- Retrieval logic isolated inside `/lib` to separate business logic from API routes
-- Avoided vector databases (e.g., pgvector) to manually implement similarity logic
-- Kept architecture simple (no background workers, queues, or caching layers)
-- Ensured modularity between upload, retrieval, and health-check flows
-
-The final structure reflects intentional modular design rather than generated scaffolding.
+**Evolution:**
+- Initial choice was manual cosine similarity in the app layer.
+- **Later**: Switched to **pgvector** for similarity in the database (avoids loading all chunks, scales better, fixes OOM).
+- Retrieval logic remains in `/lib` (e.g. `lib/rag.ts`); upload, documents, and status flows stay modular.
+- No background workers or queues; upload is synchronous (Vercel serverless timeout applies).
 
 ---
 
-## 2. Database Modeling Strategy (Prisma)
+## 2. Database Modeling (Prisma)
 
 **Prompt Used:**
 
 > Suggest a normalised relational schema for storing documents and embedding chunks in PostgreSQL using Prisma.
 
-**Final Implemented Schema:**
+**Current Schema:**
 
-### Document Model
+### Document
 
 - `id` → `String @id @default(uuid())`
 - `name` → `String`
+- `contentHash` → `String @unique` (SHA-256 hex of file content for duplicate detection)
 - `createdAt` → `DateTime @default(now())`
 - `updatedAt` → `DateTime @updatedAt`
 - `chunks` → One-to-many relation with `Chunk`
 
-**Index:**
+**Index:** `@@index([createdAt])`
 
-- `@@index([createdAt])`
-
-Used to allow efficient chronological sorting.
-
----
-
-### Chunk Model
+### Chunk
 
 - `id` → `String @id @default(uuid())`
-- `documentId` → Foreign key
+- `documentId` → Foreign key to Document
 - `document` → Relation with `onDelete: Cascade`
 - `content` → `String @db.Text`
-- `embedding` → `Float[]`
+- `embedding` → `Unsupported("vector(1536)")` (pgvector)
 - `createdAt` → `DateTime @default(now())`
 
-**Indexes:**
-
-- `@@index([documentId])`
+**Index:** `@@index([documentId])`
 
 **Design Decisions:**
-
-- Used `Float[]` to store embeddings directly in PostgreSQL.
-- Stored chunk content as `@db.Text` to support larger text bodies.
-- Enabled `onDelete: Cascade` so deleting a document removes associated chunks.
-- Added index on `documentId` for efficient chunk retrieval per document.
-
-**Manual Validation:**
-- Verified migration SQL output
-- Confirmed relational integrity in Prisma Studio
-- Ensured cascade deletion works correctly
-
-Avoided:
-- JSON-based storage
-- Storing full documents without chunking
-- Embedding computation inside SQL
+- **pgvector**: `vector(1536)` for embeddings; extension enabled in datasource; insert/query via `$executeRaw` / `$queryRaw` with `pgvector.toSql()`.
+- **contentHash**: Enables duplicate detection; unique so same content cannot be stored twice.
+- Cascade delete so removing a document removes its chunks.
+- Migrations are committed (no longer gitignored) for Vercel and production deploys.
 
 ---
 
-## 3. Cosine Similarity Implementation
+## 3. Vector Similarity (pgvector)
 
-**Prompt Used:**
+**Context:**  
+Similarity was initially implemented in TypeScript (cosine similarity in `lib/similarity.ts`). That was replaced by **pgvector** for performance and to avoid OOM when the corpus grew.
 
-> Implement cosine similarity in TypeScript without using external libraries.
+**Current Approach:**
+- **Storage**: Chunk embeddings stored as `vector(1536)` in PostgreSQL.
+- **Query**: Single raw SQL query using cosine distance operator `<=>`:
+  - `ORDER BY c.embedding <=> $queryVector LIMIT 3`
+  - Only the top 3 rows (content + document name + distance) are returned.
+- **Filtering**: Rows with `distance > 0.5` dropped; if best `distance > 0.9`, return “No relevant information found.”
+- **Library**: `pgvector` npm package for `toSql(embedding)` and typed raw queries.
 
-**Reason:**
-To demonstrate understanding of vector similarity computation rather than delegating to pgvector.
-
-**Manual Verification:**
-- Validated vector length consistency
-- Verified normalisation formula
-- Confirmed correct descending similarity sort
-- Logged similarity scores during retrieval tuning
-
-Similarity is computed at the application layer, not the database layer.
+Manual cosine similarity is no longer used; `lib/similarity.ts` was removed.
 
 ---
 
-## 4. Document Chunking Strategy
+## 4. Chunking Strategy
 
-**Prompt Used:**
+**Earlier Prompt:**
 
 > Propose a chunking strategy for RAG that avoids breaking words and keeps chunk size around 800 characters.
 
-**Final Strategy Implemented:**
-- Approx. 700–900 character chunks
-- Word-boundary safe splitting
-- Trimmed whitespace
-- Stored chunks independently with embeddings
+**Current Strategy (Recursive Splitter):**
+- **Separators** (coarsest to finest): `\n\n` → `\n` → `. ` → `! ` → `? ` → `; ` → `, ` → ` ` → character.
+- **Max chunk size**: 4000 characters (~1000 tokens), under `text-embedding-3-small` 8191-token limit.
+- **Overlap**: 200 characters to preserve context across boundaries.
+- **Logic**: Split on first separator that appears; merge segments up to max size; recurse with finer separators when a segment exceeds max.
 
-**Why ~800 Characters?**
-- Balances context size vs embedding granularity
-- Improves semantic specificity
-- Reduces token cost per embedding
+**Rationale:**  
+Fewer, semantically coherent chunks; fewer embeddings per document; lower memory and API cost; chunks stay within model context.
 
 ---
 
-## 5. Retrieval Logic Design
+## 5. Retrieval and RAG Pipeline
 
-**Prompt Used:**
+**Earlier Prompt:**
 
 > Suggest a clean top-k retrieval approach using cosine similarity and threshold filtering.
 
-**Final Retrieval Pipeline:**
+**Current Pipeline:**
 
-1. Generate question embedding
-2. Retrieve all chunks via Prisma
-3. Compute cosine similarity in application layer
-4. Sort descending by similarity
-5. Select top 3 chunks
-6. Apply similarity threshold (0.5)
-7. Provide filtered chunks to LLM as context
+1. Generate question embedding (OpenAI `text-embedding-3-small`).
+2. Run pgvector query: `ORDER BY embedding <=> $queryVector LIMIT 3`, join Document for name.
+3. Filter rows: keep only `distance <= 0.5`; if best `distance > 0.9`, return “No relevant information found.”
+4. Build context string from kept chunks (joined with `\n\n---\n\n`).
+5. Call GPT-4o-mini with grounding prompt (context + question; answer only from context).
+6. Return answer and sources (document name + chunk content).
 
-**Threshold Tuning:**
-- Initially tested at 0.6 (too strict)
-- Adjusted to 0.5 after empirical testing
-- Validated using:
-  - Direct matches
-  - Semantic variations
-  - Irrelevant queries
-
-Threshold tuning was done manually based on observed precision vs recall tradeoffs.
+**Thresholds:**  
+- `MAX_COSINE_DISTANCE = 0.5` (equivalent to similarity ≥ 0.5).  
+- `MAX_DISTANCE_FOR_BEST = 0.9` (reject when best match is too weak).
 
 ---
 
@@ -147,33 +117,68 @@ Threshold tuning was done manually based on observed precision vs recall tradeof
 
 > Draft a system prompt that forces the LLM to answer strictly using provided context and avoids hallucination.
 
-**Final Prompt Characteristics:**
-- Explicit grounding instruction
-- Required fallback response:
-  “I don't know based on the provided documents.”
-- Temperature set to 0.1 for deterministic output
-- Context clearly separated from user query
+**Final Prompt (in code):**
 
-This reduces hallucination risk and ensures answer traceability.
+```
+You are a precise assistant. Answer strictly using the provided context.
+If the answer is not contained in the context, respond with:
+"I don't know based on the provided documents."
+
+Context:
+<chunks>
+
+Question: <question>
+
+Answer:
+```
+
+**Settings:**  
+- Temperature 0.1.  
+- Single user message containing context + question + instruction.  
+- Same structure used when zero or low-relevance chunks are found (predefined “no documents” / “no relevant information” responses without calling the LLM).
 
 ---
 
-## 7. Error Handling Patterns
+## 7. Duplicate Detection
 
-**Prompt Used:**
+**Approach (no specific prompt; implementation choice):**
+- Compute **SHA-256** of the raw file text (UTF-8) before chunking.
+- Store as `Document.contentHash` with a **unique** constraint.
+- Before creating a new document, `findUnique({ where: { contentHash } })`.
+- If found: return **409 Conflict** with `{ duplicate: true, existingDocument: { id, name } }`; no chunks or embeddings created.
+- Frontend shows an amber “Duplicate detected” message with the existing document name.
+
+**Rationale:**  
+Deterministic, fast; avoids duplicate content and redundant embedding cost.
+
+---
+
+## 8. Error Handling and Production
+
+**Prompt Used (earlier):**
 
 > Suggest robust error handling patterns for Next.js API routes using TypeScript.
 
-**Manual Testing Performed:**
-- Missing `OPENAI_API_KEY`
-- Missing `DATABASE_URL`
-- Empty file upload
-- Invalid file type
-- No documents available
-- Similarity below threshold
-- OpenAI API failure simulation
-- Temporary database connection interruption
+**Current Practice:**
+- Validation: file presence, size, type (.txt), non-empty content; question non-empty.
+- Duplicate: 409 with structured body.
+- Server errors: 500 with message; no stack in response.
+- Health checks: `/api/status` probes DB and OpenAI (embedding + completion) and returns 503 when degraded.
 
-All API routes return appropriate HTTP status codes.
+**Production / Vercel:**
+- `postinstall` and `build` run `prisma generate`.
+- Migrations committed; `prisma migrate deploy` run against production DB.
+- `next.config.mjs`: `serverExternalPackages: ['@prisma/client', 'prisma']` for Vercel serverless.
+- `.env.example` documents `OPENAI_API_KEY` and `DATABASE_URL`; README includes local and Vercel deployment steps.
 
 ---
+
+## 9. UI and UX
+
+**Later work (glassmorphism and flow):**
+- **Design**: Glassmorphism (blur, translucent panels, gradient background, accent colors).
+- **Pages**: Home (hero + feature cards), Upload (drag-and-drop, duplicate/error/success states), Documents (table), Ask (textarea + answer + sources), Status (service health with badges).
+- **Components**: Shared nav, glass cards, primary button, input-glass, alert-error / alert-success, duplicate warning (amber).
+- **Accessibility**: Semantic HTML, labels, focus states; no major a11y audit documented.
+
+All prompts and decisions above reflect the current codebase as of the last update.
