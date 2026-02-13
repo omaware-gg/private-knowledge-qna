@@ -21,11 +21,14 @@ export default function DocumentsPage() {
 
   const fetchDocuments = async () => {
     try {
-      const response = await fetch('/api/documents');
+      const response = await fetch('/api/documents', {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
       const data = await response.json();
       if (!response.ok)
         throw new Error(data.error || 'Failed to fetch documents');
-      setDocuments(data.documents);
+      setDocuments(Array.isArray(data.documents) ? data.documents : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load documents');
     } finally {

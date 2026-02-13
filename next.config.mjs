@@ -1,7 +1,4 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {
-  // Vercel serverless functions: increase timeout for embedding-heavy uploads
-  serverExternalPackages: ['@prisma/client', 'prisma'],
-};
+const nextConfig = {};
 
 export default nextConfig;
