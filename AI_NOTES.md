@@ -7,9 +7,6 @@ This document provides transparency about the use of AI tools in building this p
 ### Primary Tool
 - **Claude Sonnet 4.5** (via Cursor IDE)
 
-### Provider
-- Anthropic
-
 ## What AI Was Used For
 
 ### 1. Boilerplate Setup
@@ -28,7 +25,6 @@ This document provides transparency about the use of AI tools in building this p
 ### 3. Code Patterns
 - Consistent error handling across API routes
 - TypeScript type definitions
-- Form handling patterns in React
 - Navigation structure
 
 ## What Was Manually Reviewed and Verified
@@ -66,7 +62,7 @@ This document provides transparency about the use of AI tools in building this p
 ## Model Selection
 
 ### Embedding Model: `text-embedding-3-small`
-- **Reason**: Cost-effective for internship-level project
+- **Reason**: Cost-effective for the project
 - **Performance**: 1536 dimensions, good quality for semantic search
 - **Tradeoff**: Lower cost vs. `text-embedding-3-large` (which has better quality but higher cost)
 
@@ -79,10 +75,9 @@ This document provides transparency about the use of AI tools in building this p
 
 1. **No Runtime Testing**: Generated code was not automatically tested - manual verification was required
 2. **Edge Cases**: Some edge cases may not have been considered (e.g., very large embeddings, concurrent uploads)
-3. **Performance**: No performance profiling was done - optimizations would be needed for production
+3. **Performance**: No performance profiling was done - optimisations would be needed for production
 4. **Security**: Basic validation implemented, but production would need more thorough security review
-5. **Error Messages**: Some error messages may be too technical for end users
-6. **Type Safety**: While TypeScript is used, runtime validation (e.g., Zod) would be beneficial for API routes
+5. **Type Safety**: While TypeScript is used, runtime validation (e.g., Zod) would be beneficial for API routes
 
 ## Manual Improvements Made
 
@@ -91,13 +86,3 @@ This document provides transparency about the use of AI tools in building this p
 3. **Error Messages**: Improved user-facing error messages for better UX
 4. **Status Page**: Enhanced health checks to test actual API calls, not just configuration
 5. **Type Definitions**: Added explicit interfaces for all API responses
-
-## Transparency Statement
-
-This project was built with significant AI assistance for boilerplate and initial structure. However, all critical logic (similarity computation, prompt engineering, error handling) was manually reviewed and verified. The final code represents a collaborative effort between AI-generated scaffolding and human verification/refinement.
-
-The use of AI accelerated development but did not replace critical thinking about:
-- Algorithm correctness
-- Security considerations
-- User experience
-- Architecture decisions
